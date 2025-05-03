@@ -6,7 +6,7 @@ import argparse
 import sys
 import os
 #Hola
-# --- Argumentos adaptables para Jupyter o script ---
+# --- Argumentos adaptables para Jupyter o script --
 def parse_args():
     if "ipykernel" in sys.argv[0]:  # Ejecutando en Jupyter
         class Args:
