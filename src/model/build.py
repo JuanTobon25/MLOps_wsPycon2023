@@ -1,13 +1,15 @@
-#
-import torch
-
-# Import the model class from the main file
-from src.Classifier import Classifier
-
 import os
+import pandas as pd
+import joblib
 import argparse
 import wandb
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, accuracy_score
 
+# --- Login to Weights & Biases ---
+wandb.login(key="41eaef54f8dd6ac2d3b892988e6ab0f5c40331f8", relogin=True)
+
+# --- Parse execution ID ---
 parser = argparse.ArgumentParser()
 parser.add_argument('--IdExecution', type=str, help='ID of the execution')
 args = parser.parse_args()
@@ -17,44 +19,60 @@ if args.IdExecution:
 else:
     args.IdExecution = "testing console"
 
-# Check if the directory "./model" exists
-if not os.path.exists("./model"):
-    # If it doesn't exist, create it
-    os.makedirs("./model")
+# --- Load standardized data from wandb artifact ---
+with wandb.init(project="EXPERIENCIAS", name=f"Train Model ExecId-{args.IdExecution}", job_type="train-model") as run:
+    artifact = run.use_artifact("juanjotox25-universidad-eafit/EXPERIENCIAS/iris-tabular-standardized:latest", type="dataset")
+    data_dir = artifact.download()
 
-# Data parameters testing
-num_classes = 10
-input_shape = 784
+    df_train = pd.read_csv(os.path.join(data_dir, "train.csv"))
+    df_test = pd.read_csv(os.path.join(data_dir, "test.csv"))
 
-def build_model_and_log(config, model, model_name="MLP", model_description="Simple MLP"):
-    with wandb.init(project="MLOps-Pycon2023", 
-        name=f"initialize Model ExecId-{args.IdExecution}", 
-        job_type="initialize-model", config=config) as run:
-        config = wandb.config
+    # --- Split features and labels ---
+    X_train = df_train.drop(columns="target")
+    y_train = df_train["target"]
+    X_test = df_test.drop(columns="target")
+    y_test = df_test["target"]
 
-        model_artifact = wandb.Artifact(
-            model_name, type="model",
-            description=model_description,
-            metadata=dict(config))
+    # --- Ensure model directory exists ---
+    os.makedirs("./model", exist_ok=True)
+    model_path = "./model/iris_rf_model.joblib"
 
-        name_artifact_model = f"initialized_model_{model_name}.pth"
+    # --- Load or build the model ---
+    if os.path.exists(model_path):
+        model = joblib.load(model_path)
+        print("📦 Modelo cargado desde archivo.")
+    else:
+        print("⚠️ Modelo no encontrado. Creando uno nuevo...")
 
-        torch.save(model.state_dict(), f"./model/{name_artifact_model}")
-        # ➕ another way to add a file to an Artifact
-        model_artifact.add_file(f"./model/{name_artifact_model}")
+        # --- Aquí cambiamos el modelo a Random Forest ---
+        model = RandomForestClassifier(n_estimators=50, random_state=42)
+        joblib.dump(model, model_path)
+        print("✅ Modelo construido y guardado sin entrenar.")
 
-        wandb.save(name_artifact_model)
+    # --- Train the model ---
+    model.fit(X_train, y_train)
 
-        run.log_artifact(model_artifact)
+    # --- Evaluate the model ---
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True)
 
+    # --- Log metrics to wandb ---
+    wandb.log({
+        "accuracy": acc,
+        "precision_setosa": report["0"]["precision"],
+        "recall_setosa": report["0"]["recall"],
+        "f1_setosa": report["0"]["f1-score"],
+        "precision_versicolor": report["1"]["precision"],
+        "recall_versicolor": report["1"]["recall"],
+        "f1_versicolor": report["1"]["f1-score"],
+        "precision_virginica": report["2"]["precision"],
+        "recall_virginica": report["2"]["recall"],
+        "f1_virginica": report["2"]["f1-score"],
+    })
 
-# MLP
-# Testing config
-model_config = {"input_shape":input_shape,
-                "hidden_layer_1": 32,
-                "hidden_layer_2": 64,
-                "num_classes":num_classes}
-
-model = Classifier(**model_config)
-
-build_model_and_log(model_config, model, "linear","Simple Linear Classifier")
+    # --- Save the trained model ---
+    trained_model_path = "./model/iris_rf_model_trained.joblib"
+    joblib.dump(model, trained_model_path)
+    print(f"✅ Modelo entrenado y guardado en {trained_model_path}")
+    print("✅ Métricas registradas en wandb.")
